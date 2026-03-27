@@ -1,130 +1,33 @@
 import streamlit as st
 import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.utils import get_column_letter
+from openpyxl.styles.borders import Border, Side
 import re
 import io
+import math
 from datetime import datetime, date
 from collections import defaultdict
-from openpyxl.styles import Font, PatternFill, Alignment
 
-st.set_page_config(
-    page_title="Анализ МП Инспектор",
-    page_icon="📊",
-    layout="centered"
-)
+st.set_page_config(page_title="МП Инспектор — Анализ КНМ", page_icon="📊", layout="wide")
 
-# ================== Конфигурация ==================
 SHEET_NAME = "Детализация МП Инспектор"
 
-SUBJEKT_TO_DISTRICT = {
-    "УНДиПР ГУ МЧС России по Чукотскому АО": "Дальневосточный ФО",
-    "УНДиПР ГУ МЧС России по Забайкальскому краю": "Дальневосточный ФО",
-    "УНДиПР ГУ МЧС России по Сахалинской области": "Дальневосточный ФО",
-    "УНДиПР ГУ МЧС России по Приморскому краю": "Дальневосточный ФО",
-    "УНДиПР ГУ МЧС России по Еврейской АО": "Дальневосточный ФО",
-    "УНДиПР ГУ МЧС России по Камчатскому краю": "Дальневосточный ФО",
-    "УНДиПР ГУ МЧС России по Республике Саха (Якутия)": "Дальневосточный ФО",
-    "УНДиПР Главного управления МЧС России по Республике Бурятия": "Дальневосточный ФО",
-    "УНДиПР ГУ МЧС России по Хабаровскому краю": "Дальневосточный ФО",
-    "УНДиПР ГУ МЧС России по Магаданской области": "Дальневосточный ФО",
-    "УНДиПР ГУ МЧС России по Амурской области": "Дальневосточный ФО",
-    "УНДиПР ГУ МЧС России по Донецкой Народной Республике": "Новые регионы",
-    "УНДиПР ГУ МЧС России по Запорожской области": "Новые регионы",
-    "УНДиПР ГУ МЧС России по Херсонской области": "Новые регионы",
-    "УНДиПР ГУ МЧС России по Луганской Народной Республике": "Новые регионы",
-    "УНДиПР ГУ МЧС России по Пензенской области": "Приволжский ФО",
-    "УНДиПР ГУ МЧС России по Оренбургской области": "Приволжский ФО",
-    "УНДиПР ГУ МЧС России по Ульяновской области": "Приволжский ФО",
-    "УНДиПР ГУ МЧС России по Республике Башкортостан": "Приволжский ФО",
-    "УНДиПР ГУ МЧС России по Удмуртской Республике": "Приволжский ФО",
-    "УНДиПР ГУ МЧС России по Самарской области": "Приволжский ФО",
-    "УНДиПР ГУ МЧС России по Нижегородской области": "Приволжский ФО",
-    "УНДиПР ГУ МЧС России по Кировской области": "Приволжский ФО",
-    "УНДиПР ГУ МЧС России по Пермскому краю": "Приволжский ФО",
-    "УНДиПР ГУ МЧС России по Саратовской области": "Приволжский ФО",
-    "УНДиПР ГУ МЧС России по Республике Мордовия": "Приволжский ФО",
-    "УНДиПР ГУ МЧС России по Чувашской Республике - Чувашии": "Приволжский ФО",
-    "УНДиПР Главного управления МЧС России по Республике Марий Эл": "Приволжский ФО",
-    "УНДиПР ГУ МЧС России по Республике Татарстан": "Приволжский ФО",
-    "УНДПР Главного управления МЧС России по г. Санкт-Петербургу": "Северо-Западный ФО",
-    "УНДиПР ГУ МЧС России по Ленинградской области": "Северо-Западный ФО",
-    "УНДиПР ГУ МЧС России по Калининградской области": "Северо-Западный ФО",
-    "УНДиПР ГУ МЧС России по Псковской области": "Северо-Западный ФО",
-    "УНДиПР ГУ МЧС России по Республике Коми": "Северо-Западный ФО",
-    "УНДиПР ГУ МЧС России по Архангельской области": "Северо-Западный ФО",
-    "УНДиПР ГУ МЧС России по Вологодской области": "Северо-Западный ФО",
-    "УНДиПР ГУ МЧС России по Новгородской области": "Северо-Западный ФО",
-    "УНДиПР ГУ МЧС России по Республике Карелия": "Северо-Западный ФО",
-    "УНДиПР ГУ МЧС России по Мурманской области": "Северо-Западный ФО",
-    "ОНДиПР ГУ МЧС России по Ненецкому автономному округу": "Северо-Западный ФО",
-    "УНДиПР ГУ МЧС России по Кабардино-Балкарской Республике": "Северо-Кавказский ФО",
-    "УНДиПР ГУ МЧС России по Республике Северная Осетия - Алания": "Северо-Кавказский ФО",
-    "УНДиПР ГУ МЧС России по Республике Дагестан": "Северо-Кавказский ФО",
-    "УНДиПР ГУ МЧС России по Карачаево-Черкесской Республике": "Северо-Кавказский ФО",
-    "УНДиПР ГУ МЧС России по Ставропольскому краю": "Северо-Кавказский ФО",
-    "УНДиПР ГУ МЧС России по Республике Ингушетия": "Северо-Кавказский ФО",
-    "УНДиПР ГУ МЧС России по Чеченской Республике": "Северо-Кавказский ФО",
-    "УНДиПР ГУ МЧС России по Республике Тыва": "Сибирский ФО",
-    "УНДиПР ГУ МЧС России по Новосибирской области": "Сибирский ФО",
-    "УНДиПР ГУ МЧС России по Кемеровской области - Кузбассу": "Сибирский ФО",
-    "УНДиПР ГУ МЧС России по Красноярскому краю": "Сибирский ФО",
-    "УНДиПР ГУ МЧС России по Томской области": "Сибирский ФО",
-    "УНДиПР ГУ МЧС России по Республике Алтай": "Сибирский ФО",
-    "УНДиПР ГУ МЧС России по Омской области": "Сибирский ФО",
-    "УНДиПР ГУ МЧС России по Республике Хакасия": "Сибирский ФО",
-    "УНДиПР ГУ МЧС России по Алтайскому краю": "Сибирский ФО",
-    "УНДиПР ГУ МЧС России по Иркутской области": "Сибирский ФО",
-    "УНДиПР ГУ МЧС России по Курганской области": "Уральский ФО",
-    "УНДиПР ГУ МЧС России по Свердловской области": "Уральский ФО",
-    "УНДиПР ГУ МЧС России по Челябинской области": "Уральский ФО",
-    "УНДиПР ГУ МЧС России по Ямало-Ненецкому АО": "Уральский ФО",
-    "УНДиПР ГУ МЧС России по Ханты-Мансийскому АО - Югре": "Уральский ФО",
-    "УНДиПР ГУ МЧС России по Тюменской области": "Уральский ФО",
-    "УНДиПР ГУ МЧС России по Тверской области": "Центральный ФО",
-    "УНДиПР ГУ МЧС России по Курской области": "Центральный ФО",
-    "УНДиПР ГУ МЧС России по г. Москве": "Центральный ФО",
-    "УНДиПР ГУ МЧС России по Московской области": "Центральный ФО",
-    "УНДиПР ГУ МЧС России по Владимирской области": "Центральный ФО",
-    "УНДиПР ГУ МЧС России по Тамбовской области": "Центральный ФО",
-    "УНДиПР ГУ МЧС России по Тульской области": "Центральный ФО",
-    "УНДиПР ГУ МЧС России по Липецкой области": "Центральный ФО",
-    "УНДиПР ГУ МЧС России по Рязанской области": "Центральный ФО",
-    "УНДиПР ГУ МЧС России по Костромской области": "Центральный ФО",
-    "УНДиПР ГУ МЧС России по Ярославской области": "Центральный ФО",
-    "УНДиПР ГУ МЧС России по Ивановской области": "Центральный ФО",
-    "УНДиПР ГУ МЧС России по Воронежской области": "Центральный ФО",
-    "УНДиПР ГУ МЧС России по Калужской области": "Центральный ФО",
-    "УНДиПР ГУ МЧС России по Белгородской области": "Центральный ФО",
-    "УНДиПР ГУ МЧС России по Брянской области": "Центральный ФО",
-    "УНДиПР ГУ МЧС России по Смоленской области": "Центральный ФО",
-    "УНДПР ГУ МЧС России по Орловской области": "Центральный ФО",
-    "УНДиПР ГУ МЧС России по г. Севастополю": "Южный ФО",
-    "УНДиПР ГУ МЧС России по Волгоградской области": "Южный ФО",
-    "УНДиПР ГУ МЧС России по Ростовской области": "Южный ФО",
-    "УНДиПР ГУ МЧС России по Республике Адыгея": "Южный ФО",
-    "УНДиПР ГУ МЧС России по Астраханской области": "Южный ФО",
-    "УНДиПР ГУ МЧС России по Республике Крым": "Южный ФО",
-    "УНДиПР ГУ МЧС России по Республике Калмыкия": "Южный ФО",
-    "УНДиПР ГУ МЧС России по Краснодарскому краю": "Южный ФО",
-}
-
 COLUMN_KEYWORDS = {
-    'subjekt': ['субъект рф'],
-    'podrazdelenie': ['подразделение'],
-    'vid_nadzora': ['вид надзора'],
-    'nom_knm': ['номер кнм'],
-    'vid': ['вид'],
-    'status': ['статус кнм'],
-    'narusheniya': ['нарушения выявлены'],
-    'proverka_ogv': ['проверка огв/омсу'],
-    'knd': ['кнд'],
-    'ssylki': ['ссылки на файлы'],
-    'date_act': ['дата составления акта о результате кнм', 'дата составления акта'],
+    'subjekt':         ['субъект рф'],
+    'podrazd':         ['подразделение'],
+    'vid_nadzora':     ['вид надзора'],
+    'nom_knm':         ['номер кнм'],
+    'vid':             ['вид'],
+    'status':          ['статус кнм'],
+    'narusheniya':     ['нарушения выявлены'],
+    'proverka_ogv':    ['проверка огв/омсу'],
+    'knd':             ['кнд'],
+    'ssylki':          ['ссылки на файлы'],
+    'date_act':        ['дата составления акта о результате кнм', 'дата составления акта'],
     'tip_prof_vizita': ['тип проф. визита', 'тип профилактического визита'],
-    's_vks': ['с вкс', 'вкс'],
+    's_vks':           ['с вкс', 'вкс'],
 }
-
-
-# ================== Вспомогательные функции ==================
 
 def normalize_str(s):
     if s is None:
@@ -132,8 +35,8 @@ def normalize_str(s):
     return re.sub(r'\s+', ' ', str(s).strip()).lower()
 
 def find_column_index(headers, possible_names):
-    headers_norm = [normalize_str(h) for h in headers]
-    possible_norm = [normalize_str(name) for name in possible_names]
+    headers_norm  = [normalize_str(h) for h in headers]
+    possible_norm = [normalize_str(n) for n in possible_names]
     for idx, norm in enumerate(headers_norm):
         if norm in possible_norm:
             return idx
@@ -148,7 +51,7 @@ def parse_date(value):
         return None
     if isinstance(value, datetime):
         return value.date()
-    if isinstance(value, date):
+    if isinstance(value, date) and not isinstance(value, datetime):
         return value
     if isinstance(value, str):
         value = value.strip()
@@ -162,25 +65,35 @@ def parse_date(value):
 def load_data(file_bytes):
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
     if SHEET_NAME not in wb.sheetnames:
-        raise ValueError(f"Лист '{SHEET_NAME}' не найден в файле. Доступные листы: {', '.join(wb.sheetnames)}")
+        raise ValueError(
+            f"Лист «{SHEET_NAME}» не найден.\n"
+            f"Доступные листы: {', '.join(wb.sheetnames)}"
+        )
     ws = wb[SHEET_NAME]
-    headers = [cell.value if cell.value else "" for cell in ws[1]]
+    headers      = [cell.value if cell.value else "" for cell in ws[1]]
+    headers_orig = headers[:]
+
     col_indices = {}
-    missing = []
+    warnings_   = []
+    missing     = []
     for key, possible_names in COLUMN_KEYWORDS.items():
         idx = find_column_index(headers, possible_names)
         if idx is None:
-            missing.append(f"'{key}' (искали: {possible_names})")
-        else:
-            col_indices[key] = idx
+            if key == 'podrazd':
+                idx = 17
+                warnings_.append("Столбец «подразделение» не найден по имени — используем позицию 18 (индекс 17)")
+            else:
+                missing.append(f"«{key}» (искали: {possible_names})")
+        col_indices[key] = idx
+
     if missing:
-        raise ValueError(f"Не найдены столбцы: {'; '.join(missing)}")
-    data = []
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        if all(cell is None for cell in row):
-            continue
-        data.append(row)
-    return data, col_indices, headers
+        raise ValueError("Не найдены обязательные столбцы:\n• " + "\n• ".join(missing))
+
+    data = [
+        row for row in ws.iter_rows(min_row=2, values_only=True)
+        if not all(c is None for c in row)
+    ]
+    return data, col_indices, headers_orig, warnings_
 
 def filter_by_date(data, col_idx, date_from, date_to):
     date_col = col_idx['date_act']
@@ -197,23 +110,27 @@ def filter_by_date(data, col_idx, date_from, date_to):
     return filtered, skipped
 
 def calculate_all_metrics(data, col_idx):
-    podr_col = col_idx['podrazdelenie']
-    knm_col = col_idx['nom_knm']
-    vid_col = col_idx['vid']
-    status_col = col_idx['status']
-    proverka_col = col_idx['proverka_ogv']
+    subj_col        = col_idx['subjekt']
+    podrazd_col     = col_idx['podrazd']
+    knm_col         = col_idx['nom_knm']
+    vid_col         = col_idx['vid']
+    status_col      = col_idx['status']
+    proverka_col    = col_idx['proverka_ogv']
     vid_nadzora_col = col_idx['vid_nadzora']
-    knd_col = col_idx['knd']
-    nar_col = col_idx['narusheniya']
-    vks_col = col_idx['s_vks']
-    ssylki_col = col_idx['ssylki']
+    knd_col         = col_idx['knd']
+    nar_col         = col_idx['narusheniya']
+    vks_col         = col_idx['s_vks']
+    ssylki_col      = col_idx['ssylki']
 
     allowed_vids = {"", "выездная проверка", "рейдовый осмотр", "инспекционный визит"}
-
-    knm_info = {}
-    detail = {k: [] for k in ('vks_denom', 'vks_num', 'och_denom', 'och_num', 'och_nar_denom', 'och_nar_num')}
-    rejected_vks, rejected_och = [], []
-    denom_rows_vks, denom_rows_och = {}, {}
+    metrics  = defaultdict(lambda: [set(), set(), set(), set(), set()])
+    subj_of  = {}
+    seen     = {k: set() for k in ('vks_denom','vks_num','och_denom','och_num','och_nar_denom','och_nar_num')}
+    detail   = {k: [] for k in seen}
+    denom_rows_vks = {}
+    denom_rows_och = {}
+    rejected_vks   = []
+    rejected_och   = []
 
     for row in data:
         reasons_base = []
@@ -223,328 +140,310 @@ def calculate_all_metrics(data, col_idx):
             reasons_base.append(f"Проверка ОГВ: {row[proverka_col]}")
         if normalize_str(row[vid_nadzora_col]) == "гнго":
             reasons_base.append("Вид надзора: ГНГО")
-        podr = row[podr_col] if row[podr_col] else "Не указано"
-        knm = row[knm_col]
-        if not podr or not knm:
-            reasons_base.append("Пустое подразделение или номер КНМ")
+        subj    = row[subj_col]
+        podrazd = row[podrazd_col]
+        knm     = row[knm_col]
+        if not subj or not knm:
+            reasons_base.append("Пустой субъект или номер КНМ")
 
         if reasons_base:
-            reason_str = "; ".join(reasons_base)
-            rejected_vks.append(tuple(row) + (reason_str,))
-            rejected_och.append(tuple(row) + (reason_str,))
+            r = "; ".join(reasons_base)
+            rejected_vks.append(tuple(row) + (r,))
+            rejected_och.append(tuple(row) + (r,))
             continue
 
-        vid_val = normalize_str(row[vid_col]) if row[vid_col] else ""
-        knd_str = normalize_str(row[knd_col]) if row[knd_col] else ""
-        nar_str = normalize_str(row[nar_col]) if row[nar_col] else ""
-        vks_str = normalize_str(row[vks_col]) if row[vks_col] else ""
-        ssylki_val = row[ssylki_col]
-        ssylki_not_empty = ssylki_val is not None and str(ssylki_val).strip() != ""
+        pod_key = str(podrazd).strip() if podrazd else "Не указано"
+        if pod_key not in subj_of:
+            subj_of[pod_key] = str(subj).strip() if subj else ""
+
+        vid_val   = normalize_str(row[vid_col])   if row[vid_col]   else ""
+        knd_str   = normalize_str(row[knd_col])   if row[knd_col]   else ""
+        nar_str   = normalize_str(row[nar_col])   if row[nar_col]   else ""
+        vks_str   = normalize_str(row[vks_col])   if row[vks_col]   else ""
+        ssylki_ok = row[ssylki_col] is not None and str(row[ssylki_col]).strip() != ""
+        sk = knm
 
         if vid_val in allowed_vids:
-            detail['vks_denom'].append(row)
-            if vks_str == "да" and ssylki_not_empty:
-                detail['vks_num'].append(row)
-            if knm not in denom_rows_vks and not (vks_str == "да" and ssylki_not_empty):
-                denom_rows_vks[knm] = (row, f"С ВКС ≠ 'да': {row[vks_col]}" if vks_str != "да" else "Ссылки пустые")
+            metrics[pod_key][0].add(knm)
+            if sk not in seen['vks_denom']:
+                seen['vks_denom'].add(sk); detail['vks_denom'].append(row)
+            if vks_str == "да" and ssylki_ok:
+                metrics[pod_key][1].add(knm)
+                if sk not in seen['vks_num']:
+                    seen['vks_num'].add(sk); detail['vks_num'].append(row)
+            if sk not in denom_rows_vks:
+                r = []
+                if vks_str != "да":  r.append(f"С ВКС ≠ 'да': {row[vks_col]}")
+                if not ssylki_ok:    r.append("Ссылки пустые")
+                denom_rows_vks[sk] = (row, "; ".join(r))
         else:
             rejected_vks.append(tuple(row) + (f"Вид КНМ не входит в список ВКС: {row[vid_col]}",))
 
         if vid_val in allowed_vids:
             if "осмотр" in knd_str:
-                detail['och_denom'].append(row)
-                if vks_str == "нет" and ssylki_not_empty:
-                    detail['och_num'].append(row)
-                if knm not in denom_rows_och and not (vks_str == "нет" and ssylki_not_empty):
-                    denom_rows_och[knm] = (row, f"С ВКС ≠ 'нет': {row[vks_col]}" if vks_str != "нет" else "Ссылки пустые")
+                metrics[pod_key][2].add(knm)
+                if sk not in seen['och_denom']:
+                    seen['och_denom'].add(sk); detail['och_denom'].append(row)
+                if vks_str == "нет" and ssylki_ok:
+                    metrics[pod_key][3].add(knm)
+                    if sk not in seen['och_num']:
+                        seen['och_num'].add(sk); detail['och_num'].append(row)
+                if sk not in denom_rows_och:
+                    r = []
+                    if vks_str != "нет": r.append(f"С ВКС ≠ 'нет': {row[vks_col]}")
+                    if not ssylki_ok:    r.append("Ссылки пустые")
+                    denom_rows_och[sk] = (row, "; ".join(r))
                 if nar_str == "да":
-                    detail['och_nar_denom'].append(row)
-                    if vks_str == "нет" and ssylki_not_empty:
-                        detail['och_nar_num'].append(row)
+                    metrics[pod_key][4].add(knm)
+                    if sk not in seen['och_nar_denom']:
+                        seen['och_nar_denom'].add(sk); detail['och_nar_denom'].append(row)
+                    if vks_str == "нет" and ssylki_ok:
+                        if sk not in seen['och_nar_num']:
+                            seen['och_nar_num'].add(sk); detail['och_nar_num'].append(row)
             else:
                 rejected_och.append(tuple(row) + (f"КНД не содержит 'осмотр': {row[knd_col]}",))
         else:
             rejected_och.append(tuple(row) + (f"Вид КНМ не входит в список очных: {row[vid_col]}",))
 
-        if knm not in knm_info:
-            knm_info[knm] = {
-                'podr': podr, 'vks_denom': False, 'vks_num': False,
-                'och_denom': False, 'och_num': False, 'och_nar': False
-            }
-        info = knm_info[knm]
-        if vid_val in allowed_vids:
-            info['vks_denom'] = True
-            if vks_str == "да" and ssylki_not_empty:
-                info['vks_num'] = True
-        if vid_val in allowed_vids and "осмотр" in knd_str:
-            info['och_denom'] = True
-            if vks_str == "нет" and ssylki_not_empty:
-                info['och_num'] = True
-            if nar_str == "да":
-                info['och_nar'] = True
-
-    metrics = defaultdict(lambda: [set(), set(), set(), set(), set()])
-    for knm, info in knm_info.items():
-        podr = info['podr']
-        if info['vks_denom']: metrics[podr][0].add(knm)
-        if info['vks_num']:   metrics[podr][1].add(knm)
-        if info['och_denom']: metrics[podr][2].add(knm)
-        if info['och_num']:   metrics[podr][3].add(knm)
-        if info['och_nar']:   metrics[podr][4].add(knm)
-
     denom_not_num_vks = [
         tuple(row) + (reason,)
         for knm, (row, reason) in denom_rows_vks.items()
-        if knm not in knm_info or not knm_info[knm]['vks_num']
+        if knm not in seen['vks_num']
     ]
     denom_not_num_och = [
         tuple(row) + (reason,)
         for knm, (row, reason) in denom_rows_och.items()
-        if knm not in knm_info or not knm_info[knm]['och_num']
+        if knm not in seen['och_num']
     ]
+    return metrics, subj_of, detail, rejected_vks, rejected_och, denom_not_num_vks, denom_not_num_och
 
-    return metrics, detail, rejected_vks, rejected_och, denom_not_num_vks, denom_not_num_och
-
-def build_report_data(metrics):
+def build_report_data(metrics, subj_of):
     return [{
-        'Подразделение': podr,
-        'total_vks': len(sets[0]),
-        'prim_vks': len(sets[1]),
-        'total_och': len(sets[2]),
-        'prim_och': len(sets[3]),
+        'Подразделение': pod,
+        'Субъект':       subj_of.get(pod, ""),
+        'total_vks':     len(sets[0]),
+        'prim_vks':      len(sets[1]),
+        'total_och':     len(sets[2]),
+        'prim_och':      len(sets[3]),
         'total_och_nar': len(sets[4]),
-    } for podr, sets in metrics.items()]
+    } for pod, sets in metrics.items()]
 
-def style_header(ws, fill_color):
-    fill = PatternFill("solid", start_color=fill_color, end_color=fill_color)
-    font = Font(bold=True, color="FFFFFF", name="Arial")
-    for cell in ws[1]:
-        cell.fill = fill
-        cell.font = font
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    ws.row_dimensions[1].height = 40
-
-def autowidth(ws):
-    for col in ws.columns:
-        max_len = max((len(str(c.value)) for c in col if c.value), default=10)
-        ws.column_dimensions[col[0].column_letter].width = min(max_len + 2, 60)
-
-def save_to_excel(report_data, filename, headers_orig, detail, rejected_vks, rejected_och,
-                  denom_not_num_vks, denom_not_num_och, subjekt_name, date_from, date_to):
+def build_excel(report_data, headers_orig, detail,
+                rejected_vks, rejected_och, denom_not_num_vks, denom_not_num_och):
     wb = openpyxl.Workbook()
-    ws_summary = wb.active
-    ws_summary.title = "Итоги по подразделениям"
 
-    summary_headers = [
-        "№", "Подразделение",
-        "Всего в ААС за выбранный период",
-        "Всего в МП Инспектор за выбранный период (доля)",
-        "Всего в ААС КНД за выбранный период (из них с нарушениями)",
-        "Всего в МП Инспектор за выбранный период (доля)"
-    ]
-    ws_summary.append(summary_headers)
-    style_header(ws_summary, "4472C4")
-    ws_summary.row_dimensions[1].height = 40
+    def make_fill(hex_color):
+        return PatternFill("solid", start_color=hex_color, end_color=hex_color)
 
-    sorted_data = sorted(report_data, key=lambda x: x['Подразделение'])
+    def style_row(ws, row_num, fill_color, bold=True, font_color="FFFFFF"):
+        fill = make_fill(fill_color)
+        font = Font(bold=bold, color=font_color, name="Arial", size=10)
+        for cell in ws[row_num]:
+            cell.fill = fill; cell.font = font
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-    def fmt_pct(part, total):
-        return f"{part} ({part/total*100:.2f}%)" if total > 0 else "0 (0.00%)"
-
-    def fmt_och_total(total, nar):
-        return f"{total} ({nar})"
-
-    for row_num, d in enumerate(sorted_data, 1):
-        ws_summary.append([
-            row_num,
-            d['Подразделение'],
-            d['total_vks'],
-            fmt_pct(d['prim_vks'], d['total_vks']),
-            fmt_och_total(d['total_och'], d['total_och_nar']),
-            fmt_pct(d['prim_och'], d['total_och'])
-        ])
-
-    total_vks   = sum(d['total_vks']   for d in sorted_data)
-    prim_vks    = sum(d['prim_vks']    for d in sorted_data)
-    total_och   = sum(d['total_och']   for d in sorted_data)
-    prim_och    = sum(d['prim_och']    for d in sorted_data)
-    total_och_nar = sum(d['total_och_nar'] for d in sorted_data)
-
-    ws_summary.append([
-        "", f"ИТОГО по субъекту {subjekt_name}",
-        total_vks, fmt_pct(prim_vks, total_vks),
-        fmt_och_total(total_och, total_och_nar), fmt_pct(prim_och, total_och)
-    ])
-    last_row = ws_summary.max_row
-    for col in range(1, 7):
-        ws_summary.cell(row=last_row, column=col).font = Font(bold=True)
-
-    for col in ws_summary.columns:
-        max_len = max((len(str(cell.value)) for cell in col if cell.value), default=10)
-        ws_summary.column_dimensions[col[0].column_letter].width = min(max_len + 2, 60)
+    def autowidth(ws):
+        for col in ws.columns:
+            w = max((len(str(c.value)) for c in col if c.value), default=10)
+            ws.column_dimensions[col[0].column_letter].width = min(w + 3, 60)
 
     def write_detail_sheet(title, rows, fill_color, extra_header=None):
         ws = wb.create_sheet(title=title)
         hdrs = list(headers_orig) + ([extra_header] if extra_header else [])
         ws.append(hdrs)
-        style_header(ws, fill_color)
+        style_row(ws, 1, fill_color)
+        ws.row_dimensions[1].height = 40
         for row in rows:
             ws.append(list(row))
         autowidth(ws)
 
-    write_detail_sheet("ВКС всего",        detail['vks_denom'],   "538135")
-    write_detail_sheet("ВКС с МП",         detail['vks_num'],     "C55A11")
-    write_detail_sheet("ВКС без МП",       denom_not_num_vks,    "7030A0", extra_header="Причина")
-    write_detail_sheet("ВКС - Отсеянные",  rejected_vks,          "C00000", extra_header="Причина отклонения")
-    write_detail_sheet("Очные всего",      detail['och_denom'],   "538135")
-    write_detail_sheet("Очные с МП",       detail['och_num'],     "C55A11")
-    write_detail_sheet("Очные без МП",     denom_not_num_och,    "7030A0", extra_header="Причина")
-    write_detail_sheet("Очные - Отсеянные", rejected_och,         "C00000", extra_header="Причина отклонения")
+    BLUE = "4472C4"
+    ITOG = "1F3864"
+    thin   = Side(style='thin', color="BFBFBF")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
-    ws_info = wb.create_sheet("Информация")
-    for row in [
-        ["Выбранный файл:", filename],
-        ["Период:", f"с {date_from.strftime('%d.%m.%Y')} по {date_to.strftime('%d.%m.%Y')}"],
-        ["Субъект РФ:", subjekt_name],
-        ["Дата формирования:", datetime.now().strftime('%d.%m.%Y %H:%M:%S')]
-    ]:
-        ws_info.append(row)
-    for col in ws_info.columns:
-        ws_info.column_dimensions[col[0].column_letter].width = 30
+    ws = wb.active
+    ws.title = "Итоги по подразделениям"
+    ws.append(["", "", "ВКС", "", "ОЧНЫЕ", ""])
+    ws.merge_cells("C1:D1"); ws.merge_cells("E1:F1")
+    for cell in ws[1]:
+        cell.fill      = make_fill(BLUE)
+        cell.font      = Font(bold=True, color="FFFFFF", name="Arial", size=11)
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[1].height = 28
 
-    output = io.BytesIO()
-    wb.save(output)
-    output.seek(0)
-    return output.read()
+    ws.append(["№ п/п", "Подразделение",
+               "Всего в ААС КНД", "Всего в МП Инспектор (доля, %)",
+               "Всего в ААС КНД\n(из них с нарушениями)", "Всего в МП Инспектор (доля, %)"])
+    style_row(ws, 2, BLUE)
+    ws.row_dimensions[2].height = 45
+    for i, w in enumerate([7, 45, 20, 30, 28, 30], start=1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+
+    def fmt_vks(p, t):
+        return f"{p} ({p/t*100:.2f}%)" if t else f"{p} (0.00%)"
+    def fmt_och_d(t, n):
+        return f"{t} (из них с нар.: {n})"
+    def fmt_och_n(p, t):
+        return f"{p} ({p/t*100:.2f}%)" if t else f"{p} (0.00%)"
+    def sort_key(i):
+        return i['prim_och'] / i['total_och'] if i['total_och'] > 0 else 0.0
+
+    n = 1
+    for item in sorted(report_data, key=sort_key):
+        ws.append([n, item['Подразделение'], item['total_vks'],
+                   fmt_vks(item['prim_vks'], item['total_vks']),
+                   fmt_och_d(item['total_och'], item['total_och_nar']),
+                   fmt_och_n(item['prim_och'], item['total_och'])])
+        cur = ws.max_row
+        for cell in ws[cur]:
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cell.font      = Font(name="Arial", size=10)
+            cell.border    = border
+        ws.cell(cur, 2).alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+        if n % 2 == 0:
+            for cell in ws[cur]: cell.fill = make_fill("DCE6F1")
+        pod_text = str(item['Подразделение']) if item['Подразделение'] else ""
+        lines    = math.ceil(len(pod_text) / 43) if pod_text else 1
+        ws.row_dimensions[cur].height = max(lines * 14 + 6, 20)
+        n += 1
+
+    tv = sum(i['total_vks']    for i in report_data)
+    pv = sum(i['prim_vks']     for i in report_data)
+    to = sum(i['total_och']    for i in report_data)
+    po = sum(i['prim_och']     for i in report_data)
+    tn = sum(i['total_och_nar']for i in report_data)
+    ws.append(["", "Итог по субъекту", tv, fmt_vks(pv, tv), fmt_och_d(to, tn), fmt_och_n(po, to)])
+    itog = ws.max_row
+    for cell in ws[itog]:
+        cell.fill      = make_fill(ITOG)
+        cell.font      = Font(bold=True, color="FFFFFF", name="Arial", size=10)
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border    = border
+    ws.cell(itog, 2).alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    ws.row_dimensions[itog].height = 24
+
+    write_detail_sheet("ВКС всего",          detail['vks_denom'],     "538135")
+    write_detail_sheet("ВКС с МП",           detail['vks_num'],       "C55A11")
+    write_detail_sheet("ВКС без МП",         denom_not_num_vks,       "7030A0", "Причина")
+    write_detail_sheet("ВКС — Отсеянные",    rejected_vks,            "C00000", "Причина отклонения")
+    write_detail_sheet("Очные всего",        detail['och_denom'],     "538135")
+    write_detail_sheet("Очные с МП",         detail['och_num'],       "C55A11")
+    write_detail_sheet("Очные без МП",       denom_not_num_och,       "7030A0", "Причина")
+    write_detail_sheet("Очные всего (нар.)", detail['och_nar_denom'], "375623")
+    write_detail_sheet("Очные с МП (нар.)",  detail['och_nar_num'],   "843C0C")
+    write_detail_sheet("Очные — Отсеянные",  rejected_och,            "C00000", "Причина отклонения")
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
 
 
 # ================== Streamlit UI ==================
 
-st.title("📊 Анализ применения МП Инспектор")
-st.markdown("Загрузите файл выгрузки, выберите период — и получите готовый отчёт.")
+st.title("📊 МП Инспектор — Итоги по подразделениям")
+st.markdown("Загрузите файл выгрузки АИС КНД, выберите период и получите готовый отчёт.")
 
-st.divider()
+uploaded = st.file_uploader("**Шаг 1 — Загрузите файл выгрузки (.xlsx / .xlsm)**",
+                             type=["xlsx", "xlsm"])
 
-# Шаг 1: Загрузка файла
-uploaded_file = st.file_uploader(
-    "Шаг 1. Загрузите файл выгрузки (.xlsx)",
-    type=["xlsx", "xlsm"],
-    help=f"Файл должен содержать лист «{SHEET_NAME}»"
-)
+if uploaded:
+    file_bytes = uploaded.read()
 
-if uploaded_file:
-    file_bytes = uploaded_file.read()
-
-    # Загружаем данные
-    try:
-        with st.spinner("Читаю файл..."):
-            data, col_idx, headers_orig = load_data(file_bytes)
-    except Exception as e:
-        st.error(f"Ошибка при загрузке файла: {e}")
-        st.stop()
-
-    # Определяем субъект РФ
-    subjekt_col = col_idx['subjekt']
-    subjekt_name = None
-    for row in data:
-        if row[subjekt_col]:
-            subjekt_name = str(row[subjekt_col]).strip()
-            break
-
-    if not subjekt_name:
-        st.error("Не удалось определить субъект РФ из данных файла.")
-        st.stop()
-
-    district = SUBJEKT_TO_DISTRICT.get(" ".join(subjekt_name.split()), "Не определено")
-
-    col1, col2 = st.columns(2)
-    col1.success(f"✅ Файл загружен: **{uploaded_file.name}**")
-    col1.info(f"📌 Субъект РФ: **{subjekt_name}**")
-    col2.info(f"🗺️ Округ: **{district}**")
-    col2.info(f"📋 Строк в файле: **{len(data)}**")
-
-    st.divider()
-
-    # Шаг 2: Выбор периода
-    st.subheader("Шаг 2. Выберите период (дата составления акта)")
-    c1, c2 = st.columns(2)
-    today = date.today()
-    default_from = date(today.year, 1, 1)
-
-    date_from = c1.date_input("Начало периода", value=default_from, format="DD.MM.YYYY")
-    date_to   = c2.date_input("Конец периода",  value=today,        format="DD.MM.YYYY")
-
-    if date_from > date_to:
-        st.warning("⚠️ Начальная дата позже конечной — они будут поменяны местами.")
-        date_from, date_to = date_to, date_from
-
-    st.divider()
-
-    # Шаг 3: Расчёт
-    if st.button("🚀 Сформировать отчёт", type="primary", use_container_width=True):
-        with st.spinner("Фильтрую данные..."):
-            data_filtered, skipped = filter_by_date(data, col_idx, date_from, date_to)
-
-        if not data_filtered:
-            st.error(f"За период {date_from.strftime('%d.%m.%Y')} — {date_to.strftime('%d.%m.%Y')} не найдено ни одной записи.")
+    with st.spinner("Читаем файл..."):
+        try:
+            data, col_idx, headers_orig, warnings_ = load_data(file_bytes)
+        except Exception as e:
+            st.error(f"Ошибка при загрузке: {e}")
             st.stop()
 
-        st.info(f"После фильтра по дате: **{len(data_filtered)}** строк. Пропущено (вне периода / некорректная дата): **{skipped}**.")
+    for w in warnings_:
+        st.warning(f"⚠️ {w}")
 
-        with st.spinner("Считаю показатели..."):
-            metrics, detail, rejected_vks, rejected_och, denom_not_num_vks, denom_not_num_och = \
+    st.success(f"✅ Файл загружен. Строк данных: **{len(data)}**")
+
+    st.markdown("---")
+    st.markdown("**Шаг 2 — Укажите период (дата составления акта КНМ)**")
+    today = date.today()
+    col1, col2 = st.columns(2)
+    with col1:
+        date_from = st.date_input("Дата начала", value=today)
+    with col2:
+        date_to = st.date_input("Дата окончания", value=today)
+
+    if date_from > date_to:
+        st.warning("⚠️ Начальная дата позже конечной — даты поменяны местами.")
+        date_from, date_to = date_to, date_from
+
+    st.markdown("---")
+    if st.button("🚀 Запустить расчёт", type="primary", use_container_width=True):
+
+        with st.spinner("Фильтруем по дате..."):
+            data_filtered, skipped = filter_by_date(data, col_idx, date_from, date_to)
+
+        if len(data_filtered) == 0:
+            st.error("За выбранный период данных нет. Проверьте даты.")
+            st.stop()
+
+        st.info(
+            f"Строк в периоде: **{len(data_filtered)}** &nbsp;|&nbsp; "
+            f"Пропущено (вне периода / без даты): **{skipped}**"
+        )
+
+        with st.spinner("Считаем показатели..."):
+            metrics, subj_of, detail, rej_vks, rej_och, dnn_vks, dnn_och = \
                 calculate_all_metrics(data_filtered, col_idx)
-            report_data = build_report_data(metrics)
+            report_data = build_report_data(metrics, subj_of)
 
-        with st.spinner("Формирую Excel..."):
-            result_bytes = save_to_excel(
-                report_data, uploaded_file.name, headers_orig,
-                detail, rejected_vks, rejected_och,
-                denom_not_num_vks, denom_not_num_och,
-                subjekt_name, date_from, date_to
+        st.markdown("---")
+        st.subheader("📈 Итоги по субъекту")
+
+        tv = sum(i['total_vks']    for i in report_data)
+        pv = sum(i['prim_vks']     for i in report_data)
+        to = sum(i['total_och']    for i in report_data)
+        po = sum(i['prim_och']     for i in report_data)
+        tn = sum(i['total_och_nar']for i in report_data)
+
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("ВКС всего КНМ",       tv)
+        c2.metric("ВКС с МП",            pv,
+                  delta=f"{pv/tv*100:.1f}%" if tv else "—", delta_color="normal")
+        c3.metric("Очные всего КНМ",     to)
+        c4.metric("Очные с МП",          po,
+                  delta=f"{po/to*100:.1f}%" if to else "—", delta_color="normal")
+        c5.metric("Очные с нарушениями", tn)
+
+        with st.expander("📋 Таблица по подразделениям", expanded=True):
+            import pandas as pd
+            rows_display = []
+            for item in sorted(report_data,
+                               key=lambda x: x['prim_och']/x['total_och'] if x['total_och'] > 0 else 0):
+                rows_display.append({
+                    "Подразделение":  item['Подразделение'],
+                    "ВКС всего":      item['total_vks'],
+                    "ВКС с МП":       item['prim_vks'],
+                    "ВКС доля, %":    f"{item['prim_vks']/item['total_vks']*100:.1f}" if item['total_vks'] else "—",
+                    "Очные всего":    item['total_och'],
+                    "Очные с нар.":   item['total_och_nar'],
+                    "Очные с МП":     item['prim_och'],
+                    "Очные доля, %":  f"{item['prim_och']/item['total_och']*100:.1f}" if item['total_och'] else "—",
+                })
+            st.dataframe(pd.DataFrame(rows_display), use_container_width=True, hide_index=True)
+
+        with st.spinner("Формируем Excel-файл..."):
+            excel_bytes = build_excel(
+                report_data, headers_orig, detail,
+                rej_vks, rej_och, dnn_vks, dnn_och
             )
 
-        st.success("✅ Отчёт готов!")
-
-        # Превью сводной таблицы
-        st.subheader("📋 Сводка по подразделениям")
-        sorted_data = sorted(report_data, key=lambda x: x['Подразделение'])
-
-        def fmt_pct(part, total):
-            return f"{part} ({part/total*100:.2f}%)" if total > 0 else "0 (0.00%)"
-
-        preview_rows = []
-        for i, d in enumerate(sorted_data, 1):
-            preview_rows.append({
-                "№": i,
-                "Подразделение": d['Подразделение'],
-                "ВКС (всего)": d['total_vks'],
-                "ВКС с МП (доля)": fmt_pct(d['prim_vks'], d['total_vks']),
-                "Очные (всего / с нарушениями)": f"{d['total_och']} ({d['total_och_nar']})",
-                "Очные с МП (доля)": fmt_pct(d['prim_och'], d['total_och']),
-            })
-
-        st.dataframe(preview_rows, use_container_width=True, hide_index=True)
-
-        total_vks = sum(d['total_vks'] for d in sorted_data)
-        prim_vks  = sum(d['prim_vks']  for d in sorted_data)
-        total_och = sum(d['total_och'] for d in sorted_data)
-        prim_och  = sum(d['prim_och']  for d in sorted_data)
-
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("ВКС всего",   total_vks)
-        m2.metric("ВКС с МП",   fmt_pct(prim_vks, total_vks))
-        m3.metric("Очные всего", total_och)
-        m4.metric("Очные с МП", fmt_pct(prim_och, total_och))
-
-        st.divider()
-
-        result_filename = f"результат_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        filename = f"результат_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        st.success("✅ Готово!")
         st.download_button(
-            label="⬇️ Скачать полный отчёт (.xlsx)",
-            data=result_bytes,
-            file_name=result_filename,
+            label="⬇️ Скачать результат (.xlsx)",
+            data=excel_bytes,
+            file_name=filename,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary",
             use_container_width=True,
-            type="primary"
         )
