@@ -283,7 +283,7 @@ def build_excel(report_data, headers_orig, detail,
     def fmt_vks(p, t):
         return f"{p} ({p/t*100:.2f}%)" if t else f"{p} (0.00%)"
     def fmt_och_d(t, n):
-        return f"{t} (из них с нар.: {n})"
+        return f"{t} ({n})"
     def fmt_och_n(p, t):
         return f"{p} ({p/t*100:.2f}%)" if t else f"{p} (0.00%)"
     def sort_key(i):
