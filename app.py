@@ -110,29 +110,28 @@ def filter_by_date(data, col_idx, date_from, date_to):
     return filtered, skipped
 
 def calculate_all_metrics(data, col_idx):
-    subj_col        = col_idx['subjekt']
-    podrazd_col     = col_idx['podrazd']
-    knm_col         = col_idx['nom_knm']
-    vid_col         = col_idx['vid']
-    status_col      = col_idx['status']
-    proverka_col    = col_idx['proverka_ogv']
-    vid_nadzora_col = col_idx['vid_nadzora']
-    knd_col         = col_idx['knd']
-    nar_col         = col_idx['narusheniya']
-    vks_col         = col_idx['s_vks']
-    ssylki_col      = col_idx['ssylki']
+    subj_col = col_idx["subjekt"]
+    podrazd_col = col_idx["podrazd"]
+    knm_col = col_idx["nom_knm"]
+    vid_col = col_idx["vid"]
+    status_col = col_idx["status"]
+    proverka_col = col_idx["proverka_ogv"]
+    vid_nadzora_col = col_idx["vid_nadzora"]
+    knd_col = col_idx["knd"]
+    nar_col = col_idx["narusheniya"]
+    vks_col = col_idx["s_vks"]
+    ssylki_col = col_idx["ssylki"]
 
     allowed_vids = {"", "выездная проверка", "рейдовый осмотр", "инспекционный визит"}
 
-    # --- ГЛАВНОЕ: агрегатор как в 5.6 ---
     knm_info = {}
-    subj_of  = {}
-
-    detail = {k: [] for k in ('vks_denom','vks_num','och_denom','och_num','och_nar_denom','och_nar_num')}
-    rejected_vks = []
-    rejected_och = []
+    subj_of = {}
+    seen = {key: set() for key in ("vks_denom", "vks_num", "och_denom", "och_num", "och_nar_denom", "och_nar_num")}
+    detail = {key: [] for key in seen}
     denom_rows_vks = {}
     denom_rows_och = {}
+    rejected_vks = []
+    rejected_och = []
 
     for row in data:
         reasons_base = []
@@ -144,107 +143,104 @@ def calculate_all_metrics(data, col_idx):
         if normalize_str(row[vid_nadzora_col]) == "гнго":
             reasons_base.append("Вид надзора: ГНГО")
 
-        subj    = row[subj_col]
+        subj = row[subj_col]
         podrazd = row[podrazd_col]
-        knm     = row[knm_col]
+        knm = row[knm_col]
 
         if not subj or not knm:
             reasons_base.append("Пустой субъект или номер КНМ")
 
         if reasons_base:
-            r = "; ".join(reasons_base)
-            rejected_vks.append(tuple(row) + (r,))
-            rejected_och.append(tuple(row) + (r,))
+            reason_text = "; ".join(reasons_base)
+            rejected_vks.append(tuple(row) + (reason_text,))
+            rejected_och.append(tuple(row) + (reason_text,))
             continue
 
         pod_key = str(podrazd).strip() if podrazd else "Не указано"
-
         if pod_key not in subj_of:
             subj_of[pod_key] = str(subj).strip() if subj else ""
 
-        vid_val   = normalize_str(row[vid_col]) if row[vid_col] else ""
-        knd_str   = normalize_str(row[knd_col]) if row[knd_col] else ""
-        nar_str   = normalize_str(row[nar_col]) if row[nar_col] else ""
-        vks_str   = normalize_str(row[vks_col]) if row[vks_col] else ""
+        vid_val = normalize_str(row[vid_col]) if row[vid_col] else ""
+        knd_str = normalize_str(row[knd_col]) if row[knd_col] else ""
+        nar_str = normalize_str(row[nar_col]) if row[nar_col] else ""
+        vks_str = normalize_str(row[vks_col]) if row[vks_col] else ""
         ssylki_ok = row[ssylki_col] is not None and str(row[ssylki_col]).strip() != ""
+        sk = knm
 
-        # --- детализация (как было в 5.6.1 оставляем) ---
         if vid_val in allowed_vids:
-            detail['vks_denom'].append(row)
+            append_unique(detail, seen, "vks_denom", sk, row)
             if vks_str == "да" and ssylki_ok:
-                detail['vks_num'].append(row)
-            if knm not in denom_rows_vks and not (vks_str == "да" and ssylki_ok):
-                denom_rows_vks[knm] = (row, "Ссылки пустые" if ssylki_ok else f"С ВКС ≠ 'да': {row[vks_col]}")
+                append_unique(detail, seen, "vks_num", sk, row)
+            if sk not in denom_rows_vks:
+                denom_rows_vks[sk] = (row, build_reason(vks_str, "да", ssylki_ok, row[vks_col]))
         else:
             rejected_vks.append(tuple(row) + (f"Вид КНМ не входит в список ВКС: {row[vid_col]}",))
 
         if vid_val in allowed_vids:
             if "осмотр" in knd_str:
-                detail['och_denom'].append(row)
+                append_unique(detail, seen, "och_denom", sk, row)
                 if vks_str == "нет" and ssylki_ok:
-                    detail['och_num'].append(row)
-                if knm not in denom_rows_och and not (vks_str == "нет" and ssylki_ok):
-                    denom_rows_och[knm] = (row, "Ссылки пустые" if ssylki_ok else f"С ВКС ≠ 'нет': {row[vks_col]}")
+                    append_unique(detail, seen, "och_num", sk, row)
+                if sk not in denom_rows_och:
+                    denom_rows_och[sk] = (row, build_reason(vks_str, "нет", ssylki_ok, row[vks_col]))
                 if nar_str == "да":
-                    detail['och_nar_denom'].append(row)
+                    append_unique(detail, seen, "och_nar_denom", sk, row)
                     if vks_str == "нет" and ssylki_ok:
-                        detail['och_nar_num'].append(row)
+                        append_unique(detail, seen, "och_nar_num", sk, row)
             else:
                 rejected_och.append(tuple(row) + (f"КНД не содержит 'осмотр': {row[knd_col]}",))
         else:
             rejected_och.append(tuple(row) + (f"Вид КНМ не входит в список очных: {row[vid_col]}",))
 
-        # --- КЛЮЧЕВАЯ ЧАСТЬ (как в 5.6) ---
         if knm not in knm_info:
             knm_info[knm] = {
-                'podr': pod_key,
-                'vks_denom': False,
-                'vks_num': False,
-                'och_denom': False,
-                'och_num': False,
-                'och_nar': False
+                "podr": pod_key,
+                "vks_denom": False,
+                "vks_num": False,
+                "och_denom": False,
+                "och_num": False,
+                "och_nar": False,
             }
 
         info = knm_info[knm]
 
         if vid_val in allowed_vids:
-            info['vks_denom'] = True
+            info["vks_denom"] = True
             if vks_str == "да" and ssylki_ok:
-                info['vks_num'] = True
+                info["vks_num"] = True
 
         if vid_val in allowed_vids and "осмотр" in knd_str:
-            info['och_denom'] = True
+            info["och_denom"] = True
             if vks_str == "нет" and ssylki_ok:
-                info['och_num'] = True
+                info["och_num"] = True
             if nar_str == "да":
-                info['och_nar'] = True
+                info["och_nar"] = True
 
-    # --- сбор метрик ---
     metrics = defaultdict(lambda: [set(), set(), set(), set(), set()])
 
     for knm, info in knm_info.items():
-        podr = info['podr']
-        if info['vks_denom']:
+        podr = info["podr"]
+        if info["vks_denom"]:
             metrics[podr][0].add(knm)
-        if info['vks_num']:
+        if info["vks_num"]:
             metrics[podr][1].add(knm)
-        if info['och_denom']:
+        if info["och_denom"]:
             metrics[podr][2].add(knm)
-        if info['och_num']:
+        if info["och_num"]:
             metrics[podr][3].add(knm)
-        if info['och_nar']:
+        if info["och_nar"]:
             metrics[podr][4].add(knm)
 
-    # --- без МП ---
-    denom_not_num_vks = []
-    for knm, (row, reason) in denom_rows_vks.items():
-        if not any(knm in sets[1] for sets in metrics.values()):
-            denom_not_num_vks.append(tuple(row) + (reason,))
-
-    denom_not_num_och = []
-    for knm, (row, reason) in denom_rows_och.items():
-        if not any(knm in sets[3] for sets in metrics.values()):
-            denom_not_num_och.append(tuple(row) + (reason,))
+    denom_not_num_vks = [
+        tuple(row) + (reason,)
+        for sk, (row, reason) in denom_rows_vks.items()
+        if sk not in seen["vks_num"]
+    ]
+    denom_not_num_och = [
+        tuple(row) + (reason,)
+        for sk, (row, reason) in denom_rows_och.items()
+        if sk not in seen["och_num"]
+    ]
 
     return metrics, subj_of, detail, rejected_vks, rejected_och, denom_not_num_vks, denom_not_num_och
 
