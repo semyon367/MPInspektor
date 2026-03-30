@@ -1,66 +1,77 @@
-import streamlit as st
-import openpyxl
-from openpyxl.styles import Font, PatternFill, Alignment
-from openpyxl.utils import get_column_letter
-from openpyxl.styles.borders import Border, Side
-import re
-import io
 import math
-from datetime import datetime, date
+import io
+import re
 from collections import defaultdict
+from datetime import date, datetime
+
+import openpyxl
+import streamlit as st
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.styles.borders import Border, Side
+from openpyxl.utils import get_column_letter
 
 st.set_page_config(page_title="МП Инспектор — Анализ КНМ", page_icon="📊", layout="wide")
 
+# ================== Конфигурация ==================
 SHEET_NAME = "Детализация МП Инспектор"
 
 COLUMN_KEYWORDS = {
-    'subjekt':         ['субъект рф'],
-    'podrazd':         ['подразделение'],
-    'vid_nadzora':     ['вид надзора'],
-    'nom_knm':         ['номер кнм'],
-    'vid':             ['вид'],
-    'status':          ['статус кнм'],
-    'narusheniya':     ['нарушения выявлены'],
-    'proverka_ogv':    ['проверка огв/омсу'],
-    'knd':             ['кнд'],
-    'ssylki':          ['ссылки на файлы'],
-    'date_act':        ['дата составления акта о результате кнм', 'дата составления акта'],
-    'tip_prof_vizita': ['тип проф. визита', 'тип профилактического визита'],
-    's_vks':           ['с вкс', 'вкс'],
+    "subjekt": ["субъект рф"],
+    "podrazd": ["подразделение"],
+    "vid_nadzora": ["вид надзора"],
+    "nom_knm": ["номер кнм"],
+    "vid": ["вид"],
+    "status": ["статус кнм"],
+    "narusheniya": ["нарушения выявлены"],
+    "proverka_ogv": ["проверка огв/омсу"],
+    "knd": ["кнд"],
+    "ssylki": ["ссылки на файлы"],
+    "date_act": ["дата составления акта о результате кнм", "дата составления акта"],
+    "tip_prof_vizita": ["тип проф. визита", "тип профилактического визита"],
+    "s_vks": ["с вкс", "вкс"],
 }
 
-def normalize_str(s):
-    if s is None:
+
+# ================== Вспомогательные функции ==================
+
+def normalize_str(value):
+    if value is None:
         return ""
-    return re.sub(r'\s+', ' ', str(s).strip()).lower()
+    return re.sub(r"\s+", " ", str(value).strip()).lower()
+
 
 def find_column_index(headers, possible_names):
-    headers_norm  = [normalize_str(h) for h in headers]
-    possible_norm = [normalize_str(n) for n in possible_names]
+    headers_norm = [normalize_str(header) for header in headers]
+    possible_norm = [normalize_str(name) for name in possible_names]
+
     for idx, norm in enumerate(headers_norm):
         if norm in possible_norm:
             return idx
+
     for idx, norm in enumerate(headers_norm):
-        for pname in possible_norm:
-            if pname in norm:
+        for possible_name in possible_norm:
+            if possible_name in norm:
                 return idx
+
     return None
+
 
 def parse_date(value):
     if value is None:
         return None
     if isinstance(value, datetime):
         return value.date()
-    if isinstance(value, date) and not isinstance(value, datetime):
+    if isinstance(value, date):
         return value
     if isinstance(value, str):
         value = value.strip()
-        for fmt in ('%d.%m.%Y', '%d/%m/%Y', '%d-%m-%Y'):
+        for fmt in ("%d.%m.%Y", "%d/%m/%Y", "%d-%m-%Y"):
             try:
                 return datetime.strptime(value, fmt).date()
             except ValueError:
                 continue
     return None
+
 
 def load_data(file_bytes):
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
@@ -70,18 +81,22 @@ def load_data(file_bytes):
             f"Доступные листы: {', '.join(wb.sheetnames)}"
         )
     ws = wb[SHEET_NAME]
-    headers      = [cell.value if cell.value else "" for cell in ws[1]]
+    headers = [cell.value if cell.value else "" for cell in ws[1]]
     headers_orig = headers[:]
 
     col_indices = {}
-    warnings_   = []
-    missing     = []
+    warnings_ = []
+    missing = []
+
     for key, possible_names in COLUMN_KEYWORDS.items():
         idx = find_column_index(headers, possible_names)
         if idx is None:
-            if key == 'podrazd':
-                idx = 17
-                warnings_.append("Столбец «подразделение» не найден по имени — используем позицию 18 (индекс 17)")
+            if key == "podrazd":
+                if len(headers) > 17:
+                    idx = 17
+                    warnings_.append("Столбец «подразделение» не найден по имени — используем позицию 18 (индекс 17)")
+                else:
+                    missing.append("  • 'podrazd' (не найден по имени и отсутствует столбец 18)")
             else:
                 missing.append(f"«{key}» (искали: {possible_names})")
         col_indices[key] = idx
@@ -91,23 +106,44 @@ def load_data(file_bytes):
 
     data = [
         row for row in ws.iter_rows(min_row=2, values_only=True)
-        if not all(c is None for c in row)
+        if not all(cell is None for cell in row)
     ]
     return data, col_indices, headers_orig, warnings_
 
+
 def filter_by_date(data, col_idx, date_from, date_to):
-    date_col = col_idx['date_act']
-    filtered, skipped = [], 0
+    date_col = col_idx["date_act"]
+    filtered = []
+    skipped_out_of_range = 0
+    skipped_invalid_date = 0
+
     for row in data:
         parsed = parse_date(row[date_col])
         if parsed is None:
-            skipped += 1
+            skipped_invalid_date += 1
             continue
         if date_from <= parsed <= date_to:
             filtered.append(row)
         else:
-            skipped += 1
-    return filtered, skipped
+            skipped_out_of_range += 1
+
+    return filtered, skipped_out_of_range, skipped_invalid_date
+
+
+def build_reason(vks_str, expected_value, has_links, raw_value):
+    reasons = []
+    if vks_str != expected_value:
+        reasons.append(f"С ВКС ≠ '{expected_value}': {raw_value}")
+    if not has_links:
+        reasons.append("Ссылки пустые")
+    return "; ".join(reasons)
+
+
+def append_unique(detail, seen, key, unique_key, row):
+    if unique_key not in seen[key]:
+        seen[key].add(unique_key)
+        detail[key].append(row)
+
 
 def calculate_all_metrics(data, col_idx):
     subj_col = col_idx["subjekt"]
@@ -244,16 +280,21 @@ def calculate_all_metrics(data, col_idx):
 
     return metrics, subj_of, detail, rejected_vks, rejected_och, denom_not_num_vks, denom_not_num_och
 
+
 def build_report_data(metrics, subj_of):
-    return [{
-        'Подразделение': pod,
-        'Субъект':       subj_of.get(pod, ""),
-        'total_vks':     len(sets[0]),
-        'prim_vks':      len(sets[1]),
-        'total_och':     len(sets[2]),
-        'prim_och':      len(sets[3]),
-        'total_och_nar': len(sets[4]),
-    } for pod, sets in metrics.items()]
+    result = []
+    for pod, sets in metrics.items():
+        result.append({
+            "Подразделение": pod,
+            "Субъект":       subj_of.get(pod, ""),
+            "total_vks":     len(sets[0]),
+            "prim_vks":      len(sets[1]),
+            "total_och":     len(sets[2]),
+            "prim_och":      len(sets[3]),
+            "total_och_nar": len(sets[4]),
+        })
+    return result
+
 
 def build_excel(report_data, headers_orig, detail,
                 rejected_vks, rejected_och, denom_not_num_vks, denom_not_num_och):
@@ -266,99 +307,141 @@ def build_excel(report_data, headers_orig, detail,
         fill = make_fill(fill_color)
         font = Font(bold=bold, color=font_color, name="Arial", size=10)
         for cell in ws[row_num]:
-            cell.fill = fill; cell.font = font
+            cell.fill = fill
+            cell.font = font
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
     def autowidth(ws):
         for col in ws.columns:
-            w = max((len(str(c.value)) for c in col if c.value), default=10)
-            ws.column_dimensions[col[0].column_letter].width = min(w + 3, 60)
+            width = max((len(str(cell.value)) for cell in col if cell.value), default=10)
+            ws.column_dimensions[col[0].column_letter].width = min(width + 3, 60)
 
     def write_detail_sheet(title, rows, fill_color, extra_header=None):
         ws = wb.create_sheet(title=title)
-        hdrs = list(headers_orig) + ([extra_header] if extra_header else [])
-        ws.append(hdrs)
+        headers = list(headers_orig) + ([extra_header] if extra_header else [])
+        ws.append(headers)
         style_row(ws, 1, fill_color)
         ws.row_dimensions[1].height = 40
         for row in rows:
             ws.append(list(row))
         autowidth(ws)
 
-    BLUE = "4472C4"
-    ITOG = "1F3864"
-    thin   = Side(style='thin', color="BFBFBF")
-    border = Border(left=thin, right=thin, top=thin, bottom=thin)
-
     ws = wb.active
     ws.title = "Итоги по подразделениям"
+
     ws.append(["", "", "ВКС", "", "ОЧНЫЕ", ""])
-    ws.merge_cells("C1:D1"); ws.merge_cells("E1:F1")
+    ws.merge_cells("C1:D1")
+    ws.merge_cells("E1:F1")
+
+    blue = "4472C4"
+    itog = "1F3864"
+
     for cell in ws[1]:
-        cell.fill      = make_fill(BLUE)
-        cell.font      = Font(bold=True, color="FFFFFF", name="Arial", size=11)
+        cell.fill = make_fill(blue)
+        cell.font = Font(bold=True, color="FFFFFF", name="Arial", size=11)
         cell.alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[1].height = 28
 
-    ws.append(["№ п/п", "Подразделение",
-               "Всего в ААС КНД", "Всего в МП Инспектор (доля, %)",
-               "Всего в ААС КНД\n(из них с нарушениями)", "Всего в МП Инспектор (доля, %)"])
-    style_row(ws, 2, BLUE)
+    ws.append([
+        "№ п/п",
+        "Подразделение",
+        "Всего в ААС КНД",
+        "Всего в МП Инспектор (доля, %)",
+        "Всего в ААС КНД\n(из них с нарушениями)",
+        "Всего в МП Инспектор (доля, %)",
+    ])
+    style_row(ws, 2, blue)
     ws.row_dimensions[2].height = 45
-    for i, w in enumerate([7, 45, 20, 30, 28, 30], start=1):
-        ws.column_dimensions[get_column_letter(i)].width = w
 
-    def fmt_vks(p, t):
-        return f"{p} ({p/t*100:.2f}%)" if t else f"{p} (0.00%)"
-    def fmt_och_d(t, n):
-        return f"{t} ({n})"
-    def fmt_och_n(p, t):
-        return f"{p} ({p/t*100:.2f}%)" if t else f"{p} (0.00%)"
-    def sort_key(i):
-        return i['prim_och'] / i['total_och'] if i['total_och'] > 0 else 0.0
+    col_widths = [7, 45, 20, 30, 28, 30]
+    for idx, width in enumerate(col_widths, start=1):
+        ws.column_dimensions[get_column_letter(idx)].width = width
 
-    n = 1
-    for item in sorted(report_data, key=sort_key):
-        ws.append([n, item['Подразделение'], item['total_vks'],
-                   fmt_vks(item['prim_vks'], item['total_vks']),
-                   fmt_och_d(item['total_och'], item['total_och_nar']),
-                   fmt_och_n(item['prim_och'], item['total_och'])])
-        cur = ws.max_row
-        for cell in ws[cur]:
+    def och_pct(item):
+        return item["prim_och"] / item["total_och"] if item["total_och"] > 0 else 0.0
+
+    report_sorted = sorted(report_data, key=och_pct)
+
+    def fmt_vks(prim, total):
+        pct = prim / total * 100 if total > 0 else 0.0
+        return f"{prim} ({pct:.2f}%)"
+
+    def fmt_och_denom(total, nar):
+        return f"{total} ({nar})"
+
+    def fmt_och_num(prim, total):
+        pct = prim / total * 100 if total > 0 else 0.0
+        return f"{prim} ({pct:.2f}%)"
+
+    thin = Side(style="thin", color="BFBFBF")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    row_number = 1
+    for item in report_sorted:
+        ws.append([
+            row_number,
+            item["Подразделение"],
+            item["total_vks"],
+            fmt_vks(item["prim_vks"], item["total_vks"]),
+            fmt_och_denom(item["total_och"], item["total_och_nar"]),
+            fmt_och_num(item["prim_och"], item["total_och"]),
+        ])
+
+        current_row = ws.max_row
+        for cell in ws[current_row]:
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-            cell.font      = Font(name="Arial", size=10)
-            cell.border    = border
-        ws.cell(cur, 2).alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
-        if n % 2 == 0:
-            for cell in ws[cur]: cell.fill = make_fill("DCE6F1")
-        pod_text = str(item['Подразделение']) if item['Подразделение'] else ""
-        lines    = math.ceil(len(pod_text) / 43) if pod_text else 1
-        ws.row_dimensions[cur].height = max(lines * 14 + 6, 20)
-        n += 1
+            cell.font = Font(name="Arial", size=10)
+            cell.border = border
 
-    tv = sum(i['total_vks']    for i in report_data)
-    pv = sum(i['prim_vks']     for i in report_data)
-    to = sum(i['total_och']    for i in report_data)
-    po = sum(i['prim_och']     for i in report_data)
-    tn = sum(i['total_och_nar']for i in report_data)
-    ws.append(["", "Итог по субъекту", tv, fmt_vks(pv, tv), fmt_och_d(to, tn), fmt_och_n(po, to)])
-    itog = ws.max_row
-    for cell in ws[itog]:
-        cell.fill      = make_fill(ITOG)
-        cell.font      = Font(bold=True, color="FFFFFF", name="Arial", size=10)
+        ws.cell(current_row, 2).alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+
+        if row_number % 2 == 0:
+            for cell in ws[current_row]:
+                cell.fill = make_fill("DCE6F1")
+
+        pod_text = str(item["Подразделение"]) if item["Подразделение"] else ""
+        col2_width = 43
+        line_height_pt = 14
+        padding_pt = 6
+        lines_needed = math.ceil(len(pod_text) / col2_width) if pod_text else 1
+        ws.row_dimensions[current_row].height = max(lines_needed * line_height_pt + padding_pt, 20)
+
+        row_number += 1
+
+    total_vks = sum(item["total_vks"] for item in report_data)
+    prim_vks  = sum(item["prim_vks"]  for item in report_data)
+    total_och = sum(item["total_och"] for item in report_data)
+    prim_och  = sum(item["prim_och"]  for item in report_data)
+    total_nar = sum(item["total_och_nar"] for item in report_data)
+
+    ws.append([
+        "",
+        "Итог по субъекту",
+        total_vks,
+        fmt_vks(prim_vks, total_vks),
+        fmt_och_denom(total_och, total_nar),
+        fmt_och_num(prim_och, total_och),
+    ])
+
+    itog_row = ws.max_row
+    for cell in ws[itog_row]:
+        cell.fill = make_fill(itog)
+        cell.font = Font(bold=True, color="FFFFFF", name="Arial", size=10)
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        cell.border    = border
-    ws.cell(itog, 2).alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
-    ws.row_dimensions[itog].height = 24
+        cell.border = border
 
-    write_detail_sheet("ВКС всего",          detail['vks_denom'],     "538135")
-    write_detail_sheet("ВКС с МП",           detail['vks_num'],       "C55A11")
+    ws.cell(itog_row, 2).alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    ws.row_dimensions[itog_row].height = 24
+
+    write_detail_sheet("ВКС всего",          detail["vks_denom"],     "538135")
+    write_detail_sheet("ВКС с МП",           detail["vks_num"],       "C55A11")
     write_detail_sheet("ВКС без МП",         denom_not_num_vks,       "7030A0", "Причина")
     write_detail_sheet("ВКС — Отсеянные",    rejected_vks,            "C00000", "Причина отклонения")
-    write_detail_sheet("Очные всего",        detail['och_denom'],     "538135")
-    write_detail_sheet("Очные с МП",         detail['och_num'],       "C55A11")
+    write_detail_sheet("Очные всего",        detail["och_denom"],     "538135")
+    write_detail_sheet("Очные с МП",         detail["och_num"],       "C55A11")
     write_detail_sheet("Очные без МП",       denom_not_num_och,       "7030A0", "Причина")
-    write_detail_sheet("Очные всего (нар.)", detail['och_nar_denom'], "375623")
-    write_detail_sheet("Очные с МП (нар.)",  detail['och_nar_num'],   "843C0C")
+    write_detail_sheet("Очные всего (нар.)", detail["och_nar_denom"], "375623")
+    write_detail_sheet("Очные с МП (нар.)",  detail["och_nar_num"],   "843C0C")
     write_detail_sheet("Очные — Отсеянные",  rejected_och,            "C00000", "Причина отклонения")
 
     buf = io.BytesIO()
@@ -372,8 +455,10 @@ def build_excel(report_data, headers_orig, detail,
 st.title("📊 МП Инспектор — Итоги по подразделениям")
 st.markdown("Загрузите файл выгрузки АИС КНД, выберите период и получите готовый отчёт.")
 
-uploaded = st.file_uploader("**Шаг 1 — Загрузите файл выгрузки (.xlsx / .xlsm)**",
-                             type=["xlsx", "xlsm"])
+uploaded = st.file_uploader(
+    "**Шаг 1 — Загрузите файл выгрузки (.xlsx / .xlsm)**",
+    type=["xlsx", "xlsm"],
+)
 
 if uploaded:
     file_bytes = uploaded.read()
@@ -407,7 +492,9 @@ if uploaded:
     if st.button("🚀 Запустить расчёт", type="primary", use_container_width=True):
 
         with st.spinner("Фильтруем по дате..."):
-            data_filtered, skipped = filter_by_date(data, col_idx, date_from, date_to)
+            data_filtered, skipped_out_of_range, skipped_invalid_date = filter_by_date(
+                data, col_idx, date_from, date_to
+            )
 
         if len(data_filtered) == 0:
             st.error("За выбранный период данных нет. Проверьте даты.")
@@ -415,7 +502,8 @@ if uploaded:
 
         st.info(
             f"Строк в периоде: **{len(data_filtered)}** &nbsp;|&nbsp; "
-            f"Пропущено (вне периода / без даты): **{skipped}**"
+            f"Вне периода: **{skipped_out_of_range}** &nbsp;|&nbsp; "
+            f"С нераспознанной датой: **{skipped_invalid_date}**"
         )
 
         with st.spinner("Считаем показатели..."):
@@ -426,11 +514,11 @@ if uploaded:
         st.markdown("---")
         st.subheader("📈 Итоги по субъекту")
 
-        tv = sum(i['total_vks']    for i in report_data)
-        pv = sum(i['prim_vks']     for i in report_data)
-        to = sum(i['total_och']    for i in report_data)
-        po = sum(i['prim_och']     for i in report_data)
-        tn = sum(i['total_och_nar']for i in report_data)
+        tv = sum(i["total_vks"]     for i in report_data)
+        pv = sum(i["prim_vks"]      for i in report_data)
+        to = sum(i["total_och"]     for i in report_data)
+        po = sum(i["prim_och"]      for i in report_data)
+        tn = sum(i["total_och_nar"] for i in report_data)
 
         c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("ВКС всего КНМ",       tv)
@@ -444,17 +532,16 @@ if uploaded:
         with st.expander("📋 Таблица по подразделениям", expanded=True):
             import pandas as pd
             rows_display = []
-            for item in sorted(report_data,
-                               key=lambda x: x['prim_och']/x['total_och'] if x['total_och'] > 0 else 0):
+            for item in sorted(report_data, key=lambda x: x["prim_och"] / x["total_och"] if x["total_och"] > 0 else 0):
                 rows_display.append({
-                    "Подразделение":  item['Подразделение'],
-                    "ВКС всего":      item['total_vks'],
-                    "ВКС с МП":       item['prim_vks'],
-                    "ВКС доля, %":    f"{item['prim_vks']/item['total_vks']*100:.1f}" if item['total_vks'] else "—",
-                    "Очные всего":    item['total_och'],
-                    "Очные с нар.":   item['total_och_nar'],
-                    "Очные с МП":     item['prim_och'],
-                    "Очные доля, %":  f"{item['prim_och']/item['total_och']*100:.1f}" if item['total_och'] else "—",
+                    "Подразделение": item["Подразделение"],
+                    "ВКС всего":     item["total_vks"],
+                    "ВКС с МП":      item["prim_vks"],
+                    "ВКС доля, %":   f"{item['prim_vks']/item['total_vks']*100:.1f}" if item["total_vks"] else "—",
+                    "Очные всего":   item["total_och"],
+                    "Очные с нар.":  item["total_och_nar"],
+                    "Очные с МП":    item["prim_och"],
+                    "Очные доля, %": f"{item['prim_och']/item['total_och']*100:.1f}" if item["total_och"] else "—",
                 })
             st.dataframe(pd.DataFrame(rows_display), use_container_width=True, hide_index=True)
 
