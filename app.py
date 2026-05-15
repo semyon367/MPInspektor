@@ -1,5 +1,10 @@
-import math
+"""
+Анализ применения МП Инспектор — Streamlit-версия
+Для развёртывания на Streamlit Community Cloud (GitHub)
+"""
+
 import io
+import math
 import re
 from collections import defaultdict
 from datetime import date, datetime
@@ -9,8 +14,6 @@ import streamlit as st
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.styles.borders import Border, Side
 from openpyxl.utils import get_column_letter
-
-st.set_page_config(page_title="МП Инспектор — Анализ КНМ", page_icon="📊", layout="wide")
 
 # ================== Конфигурация ==================
 SHEET_NAME = "Детализация МП Инспектор"
@@ -41,19 +44,22 @@ def normalize_str(value):
 
 
 def find_column_index(headers, possible_names):
-    headers_norm = [normalize_str(header) for header in headers]
-    possible_norm = [normalize_str(name) for name in possible_names]
-
+    headers_norm = [normalize_str(h) for h in headers]
+    possible_norm = [normalize_str(n) for n in possible_names]
     for idx, norm in enumerate(headers_norm):
         if norm in possible_norm:
             return idx
-
     for idx, norm in enumerate(headers_norm):
-        for possible_name in possible_norm:
-            if possible_name in norm:
+        for pn in possible_norm:
+            if pn in norm:
                 return idx
-
     return None
+
+
+def has_mp4_links(value):
+    if value is None:
+        return False
+    return ".mp4" in str(value).lower()
 
 
 def parse_date(value):
@@ -76,16 +82,13 @@ def parse_date(value):
 def load_data(file_bytes):
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
     if SHEET_NAME not in wb.sheetnames:
-        raise ValueError(
-            f"Лист «{SHEET_NAME}» не найден.\n"
-            f"Доступные листы: {', '.join(wb.sheetnames)}"
-        )
+        raise ValueError(f"Лист '{SHEET_NAME}' не найден в файле.")
+
     ws = wb[SHEET_NAME]
     headers = [cell.value if cell.value else "" for cell in ws[1]]
-    headers_orig = headers[:]
 
     col_indices = {}
-    warnings_ = []
+    log_lines = []
     missing = []
 
     for key, possible_names in COLUMN_KEYWORDS.items():
@@ -94,11 +97,13 @@ def load_data(file_bytes):
             if key == "podrazd":
                 if len(headers) > 17:
                     idx = 17
-                    warnings_.append("Столбец «подразделение» не найден по имени — используем позицию 18 (индекс 17)")
+                    log_lines.append(f"⚠️ Столбец 'podrazd' не найден по имени — используем позицию 18 (индекс 17)")
                 else:
-                    missing.append("  • 'podrazd' (не найден по имени и отсутствует столбец 18)")
+                    missing.append(f"'podrazd' (не найден по имени и отсутствует столбец 18)")
             else:
-                missing.append(f"«{key}» (искали: {possible_names})")
+                missing.append(f"'{key}' (искали: {possible_names})")
+        else:
+            log_lines.append(f"✅ Столбец **{key}** → `{headers[idx]}` (индекс {idx})")
         col_indices[key] = idx
 
     if missing:
@@ -108,34 +113,33 @@ def load_data(file_bytes):
         row for row in ws.iter_rows(min_row=2, values_only=True)
         if not all(cell is None for cell in row)
     ]
-    return data, col_indices, headers_orig, warnings_
+    log_lines.append(f"📊 Загружено строк: **{len(data)}**")
+    return data, col_indices, headers, log_lines
 
 
 def filter_by_date(data, col_idx, date_from, date_to):
     date_col = col_idx["date_act"]
-    filtered = []
-    skipped_out_of_range = 0
-    skipped_invalid_date = 0
-
+    filtered, skipped_range, skipped_invalid = [], 0, 0
     for row in data:
         parsed = parse_date(row[date_col])
         if parsed is None:
-            skipped_invalid_date += 1
+            skipped_invalid += 1
             continue
         if date_from <= parsed <= date_to:
             filtered.append(row)
         else:
-            skipped_out_of_range += 1
+            skipped_range += 1
+    return filtered, skipped_range, skipped_invalid
 
-    return filtered, skipped_out_of_range, skipped_invalid_date
 
-
-def build_reason(vks_str, expected_value, has_links, raw_value):
+def build_reason(vks_str, expected_value, has_links, raw_value, has_mp4=None):
     reasons = []
     if vks_str != expected_value:
         reasons.append(f"С ВКС ≠ '{expected_value}': {raw_value}")
     if not has_links:
         reasons.append("Ссылки пустые")
+    if has_mp4 is not None and not has_mp4:
+        reasons.append("Нет ссылок .mp4")
     return "; ".join(reasons)
 
 
@@ -157,6 +161,7 @@ def calculate_all_metrics(data, col_idx):
     nar_col = col_idx["narusheniya"]
     vks_col = col_idx["s_vks"]
     ssylki_col = col_idx["ssylki"]
+    mp4_col = 45
 
     allowed_vids = {"", "выездная проверка", "рейдовый осмотр", "инспекционный визит"}
 
@@ -171,7 +176,6 @@ def calculate_all_metrics(data, col_idx):
 
     for row in data:
         reasons_base = []
-
         if normalize_str(row[status_col]) != "завершена":
             reasons_base.append(f"Статус: {row[status_col]}")
         if normalize_str(row[proverka_col]) != "нет":
@@ -201,14 +205,15 @@ def calculate_all_metrics(data, col_idx):
         nar_str = normalize_str(row[nar_col]) if row[nar_col] else ""
         vks_str = normalize_str(row[vks_col]) if row[vks_col] else ""
         ssylki_ok = row[ssylki_col] is not None and str(row[ssylki_col]).strip() != ""
+        mp4_ok = has_mp4_links(row[mp4_col]) if len(row) > mp4_col else False
         sk = knm
 
         if vid_val in allowed_vids:
             append_unique(detail, seen, "vks_denom", sk, row)
-            if vks_str == "да" and ssylki_ok:
+            if vks_str == "да" and ssylki_ok and mp4_ok:
                 append_unique(detail, seen, "vks_num", sk, row)
             if sk not in denom_rows_vks:
-                denom_rows_vks[sk] = (row, build_reason(vks_str, "да", ssylki_ok, row[vks_col]))
+                denom_rows_vks[sk] = (row, build_reason(vks_str, "да", ssylki_ok, row[vks_col], mp4_ok))
         else:
             rejected_vks.append(tuple(row) + (f"Вид КНМ не входит в список ВКС: {row[vid_col]}",))
 
@@ -231,20 +236,15 @@ def calculate_all_metrics(data, col_idx):
         if knm not in knm_info:
             knm_info[knm] = {
                 "podr": pod_key,
-                "vks_denom": False,
-                "vks_num": False,
-                "och_denom": False,
-                "och_num": False,
-                "och_nar": False,
+                "vks_denom": False, "vks_num": False,
+                "och_denom": False, "och_num": False, "och_nar": False,
             }
 
         info = knm_info[knm]
-
         if vid_val in allowed_vids:
             info["vks_denom"] = True
-            if vks_str == "да" and ssylki_ok:
+            if vks_str == "да" and ssylki_ok and mp4_ok:
                 info["vks_num"] = True
-
         if vid_val in allowed_vids and "осмотр" in knd_str:
             info["och_denom"] = True
             if vks_str == "нет" and ssylki_ok:
@@ -253,19 +253,13 @@ def calculate_all_metrics(data, col_idx):
                 info["och_nar"] = True
 
     metrics = defaultdict(lambda: [set(), set(), set(), set(), set()])
-
     for knm, info in knm_info.items():
         podr = info["podr"]
-        if info["vks_denom"]:
-            metrics[podr][0].add(knm)
-        if info["vks_num"]:
-            metrics[podr][1].add(knm)
-        if info["och_denom"]:
-            metrics[podr][2].add(knm)
-        if info["och_num"]:
-            metrics[podr][3].add(knm)
-        if info["och_nar"]:
-            metrics[podr][4].add(knm)
+        if info["vks_denom"]: metrics[podr][0].add(knm)
+        if info["vks_num"]:   metrics[podr][1].add(knm)
+        if info["och_denom"]: metrics[podr][2].add(knm)
+        if info["och_num"]:   metrics[podr][3].add(knm)
+        if info["och_nar"]:   metrics[podr][4].add(knm)
 
     denom_not_num_vks = [
         tuple(row) + (reason,)
@@ -286,18 +280,17 @@ def build_report_data(metrics, subj_of):
     for pod, sets in metrics.items():
         result.append({
             "Подразделение": pod,
-            "Субъект":       subj_of.get(pod, ""),
-            "total_vks":     len(sets[0]),
-            "prim_vks":      len(sets[1]),
-            "total_och":     len(sets[2]),
-            "prim_och":      len(sets[3]),
+            "Субъект": subj_of.get(pod, ""),
+            "total_vks": len(sets[0]),
+            "prim_vks": len(sets[1]),
+            "total_och": len(sets[2]),
+            "prim_och": len(sets[3]),
             "total_och_nar": len(sets[4]),
         })
     return result
 
 
-def build_excel(report_data, headers_orig, detail,
-                rejected_vks, rejected_och, denom_not_num_vks, denom_not_num_och):
+def save_to_excel(report_data, headers_orig, detail, rejected_vks, rejected_och, denom_not_num_vks, denom_not_num_och):
     wb = openpyxl.Workbook()
 
     def make_fill(hex_color):
@@ -343,12 +336,9 @@ def build_excel(report_data, headers_orig, detail,
     ws.row_dimensions[1].height = 28
 
     ws.append([
-        "№ п/п",
-        "Подразделение",
-        "Всего в ААС КНД",
-        "Всего в МП Инспектор (доля, %)",
-        "Всего в ААС КНД\n(из них с нарушениями)",
-        "Всего в МП Инспектор (доля, %)",
+        "№ п/п", "Подразделение",
+        "Всего в ААС КНД", "Всего в МП Инспектор (доля, %)",
+        "Всего в ААС КНД\n(из них с нарушениями)", "Всего в МП Инспектор (доля, %)",
     ])
     style_row(ws, 2, blue)
     ws.row_dimensions[2].height = 45
@@ -373,28 +363,19 @@ def build_excel(report_data, headers_orig, detail,
         pct = prim / total * 100 if total > 0 else 0.0
         return f"{prim} ({pct:.2f}%)"
 
-    thin = Side(style="thin", color="BFBFBF")
-    border = Border(left=thin, right=thin, top=thin, bottom=thin)
-
     row_number = 1
     for item in report_sorted:
         ws.append([
-            row_number,
-            item["Подразделение"],
-            item["total_vks"],
-            fmt_vks(item["prim_vks"], item["total_vks"]),
+            row_number, item["Подразделение"],
+            item["total_vks"], fmt_vks(item["prim_vks"], item["total_vks"]),
             fmt_och_denom(item["total_och"], item["total_och_nar"]),
             fmt_och_num(item["prim_och"], item["total_och"]),
         ])
-
         current_row = ws.max_row
         for cell in ws[current_row]:
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
             cell.font = Font(name="Arial", size=10)
-            cell.border = border
-
         ws.cell(current_row, 2).alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
-
         if row_number % 2 == 0:
             for cell in ws[current_row]:
                 cell.fill = make_fill("DCE6F1")
@@ -405,22 +386,18 @@ def build_excel(report_data, headers_orig, detail,
         padding_pt = 6
         lines_needed = math.ceil(len(pod_text) / col2_width) if pod_text else 1
         ws.row_dimensions[current_row].height = max(lines_needed * line_height_pt + padding_pt, 20)
-
         row_number += 1
 
     total_vks = sum(item["total_vks"] for item in report_data)
-    prim_vks  = sum(item["prim_vks"]  for item in report_data)
+    prim_vks = sum(item["prim_vks"] for item in report_data)
     total_och = sum(item["total_och"] for item in report_data)
-    prim_och  = sum(item["prim_och"]  for item in report_data)
+    prim_och = sum(item["prim_och"] for item in report_data)
     total_nar = sum(item["total_och_nar"] for item in report_data)
 
     ws.append([
-        "",
-        "Итог по субъекту",
-        total_vks,
-        fmt_vks(prim_vks, total_vks),
-        fmt_och_denom(total_och, total_nar),
-        fmt_och_num(prim_och, total_och),
+        "", "Итог по субъекту",
+        total_vks, fmt_vks(prim_vks, total_vks),
+        fmt_och_denom(total_och, total_nar), fmt_och_num(prim_och, total_och),
     ])
 
     itog_row = ws.max_row
@@ -428,21 +405,25 @@ def build_excel(report_data, headers_orig, detail,
         cell.fill = make_fill(itog)
         cell.font = Font(bold=True, color="FFFFFF", name="Arial", size=10)
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        cell.border = border
-
     ws.cell(itog_row, 2).alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
     ws.row_dimensions[itog_row].height = 24
 
-    write_detail_sheet("ВКС всего",          detail["vks_denom"],     "538135")
-    write_detail_sheet("ВКС с МП",           detail["vks_num"],       "C55A11")
-    write_detail_sheet("ВКС без МП",         denom_not_num_vks,       "7030A0", "Причина")
-    write_detail_sheet("ВКС — Отсеянные",    rejected_vks,            "C00000", "Причина отклонения")
-    write_detail_sheet("Очные всего",        detail["och_denom"],     "538135")
-    write_detail_sheet("Очные с МП",         detail["och_num"],       "C55A11")
-    write_detail_sheet("Очные без МП",       denom_not_num_och,       "7030A0", "Причина")
+    thin = Side(style="thin", color="BFBFBF")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    for row in ws.iter_rows(min_row=1, max_row=itog_row, min_col=1, max_col=6):
+        for cell in row:
+            cell.border = border
+
+    write_detail_sheet("ВКС всего", detail["vks_denom"], "538135")
+    write_detail_sheet("ВКС с МП", detail["vks_num"], "C55A11")
+    write_detail_sheet("ВКС без МП", denom_not_num_vks, "7030A0", "Причина")
+    write_detail_sheet("ВКС — Отсеянные", rejected_vks, "C00000", "Причина отклонения")
+    write_detail_sheet("Очные всего", detail["och_denom"], "538135")
+    write_detail_sheet("Очные с МП", detail["och_num"], "C55A11")
+    write_detail_sheet("Очные без МП", denom_not_num_och, "7030A0", "Причина")
     write_detail_sheet("Очные всего (нар.)", detail["och_nar_denom"], "375623")
-    write_detail_sheet("Очные с МП (нар.)",  detail["och_nar_num"],   "843C0C")
-    write_detail_sheet("Очные — Отсеянные",  rejected_och,            "C00000", "Причина отклонения")
+    write_detail_sheet("Очные с МП (нар.)", detail["och_nar_num"], "843C0C")
+    write_detail_sheet("Очные — Отсеянные", rejected_och, "C00000", "Причина отклонения")
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -452,112 +433,159 @@ def build_excel(report_data, headers_orig, detail,
 
 # ================== Streamlit UI ==================
 
-st.title("📊 МП Инспектор — Итоги по подразделениям")
-st.markdown("Загрузите файл выгрузки АИС КНД, выберите период и получите готовый отчёт.")
+def main():
+    st.set_page_config(
+        page_title="МП Инспектор — Анализ",
+        page_icon="🔥",
+        layout="centered",
+    )
 
-uploaded = st.file_uploader(
-    "**Шаг 1 — Загрузите файл выгрузки (.xlsx / .xlsm)**",
-    type=["xlsx", "xlsm"],
-)
+    st.title("🔥 Анализ применения МП Инспектор")
+    st.caption("Итоги по подразделениям · ОНД и ПР · МЧС России")
 
-if uploaded:
-    file_bytes = uploaded.read()
+    st.divider()
 
-    with st.spinner("Читаем файл..."):
-        try:
-            data, col_idx, headers_orig, warnings_ = load_data(file_bytes)
-        except Exception as e:
-            st.error(f"Ошибка при загрузке: {e}")
-            st.stop()
+    # 1. Загрузка файла
+    st.subheader("1. Выгрузка из АИС КНД")
+    uploaded = st.file_uploader(
+        "Выберите файл выгрузки (.xlsx / .xlsm)",
+        type=["xlsx", "xlsm"],
+        help=f"Файл должен содержать лист «{SHEET_NAME}»",
+    )
 
-    for w in warnings_:
-        st.warning(f"⚠️ {w}")
+    if not uploaded:
+        st.info("Загрузите файл выгрузки для начала работы.")
+        return
 
-    st.success(f"✅ Файл загружен. Строк данных: **{len(data)}**")
-
-    st.markdown("---")
-    st.markdown("**Шаг 2 — Укажите период (дата составления акта КНМ)**")
-    today = date.today()
+    # 2. Выбор периода
+    st.subheader("2. Период анализа")
+    now = datetime.now()
     col1, col2 = st.columns(2)
     with col1:
-        date_from = st.date_input("Дата начала", value=today)
+        date_from = st.date_input(
+            "Дата начала периода",
+            value=date(now.year, 1, 1),
+            format="DD.MM.YYYY",
+        )
     with col2:
-        date_to = st.date_input("Дата окончания", value=today)
+        date_to = st.date_input(
+            "Дата окончания периода",
+            value=date(now.year, now.month, now.day),
+            format="DD.MM.YYYY",
+        )
 
     if date_from > date_to:
-        st.warning("⚠️ Начальная дата позже конечной — даты поменяны местами.")
+        st.warning("⚠️ Дата начала позже даты окончания — они будут переставлены местами.")
         date_from, date_to = date_to, date_from
 
-    st.markdown("---")
-    if st.button("🚀 Запустить расчёт", type="primary", use_container_width=True):
+    st.caption(f"Анализируемый период: **{date_from.strftime('%d.%m.%Y')}** — **{date_to.strftime('%d.%m.%Y')}**")
 
-        with st.spinner("Фильтруем по дате..."):
-            data_filtered, skipped_out_of_range, skipped_invalid_date = filter_by_date(
-                data, col_idx, date_from, date_to
+    # 3. Кнопка запуска
+    st.divider()
+    if not st.button("▶ Сформировать отчёт", type="primary", use_container_width=True):
+        return
+
+    # Загрузка и обработка
+    with st.spinner("Загрузка данных..."):
+        try:
+            file_bytes = uploaded.read()
+            data, col_idx, headers_orig, log_lines = load_data(file_bytes)
+        except Exception as e:
+            st.error(f"❌ Ошибка при загрузке файла:\n{e}")
+            return
+
+    with st.expander("📋 Лог определения столбцов", expanded=False):
+        for line in log_lines:
+            st.markdown(line)
+
+    with st.spinner("Фильтрация по дате..."):
+        data_filtered, skipped_range, skipped_invalid = filter_by_date(data, col_idx, date_from, date_to)
+
+    col_a, col_b, col_c = st.columns(3)
+    col_a.metric("Строк в периоде", len(data_filtered))
+    col_b.metric("Строк вне периода", skipped_range)
+    col_c.metric("Строк с нераспознанной датой", skipped_invalid)
+
+    if len(data_filtered) == 0:
+        st.warning("⚠️ Нет данных за выбранный период.")
+        return
+
+    with st.spinner("Расчёт показателей..."):
+        metrics, subj_of, detail, rej_vks, rej_och, dnn_vks, dnn_och = calculate_all_metrics(data_filtered, col_idx)
+        report_data = build_report_data(metrics, subj_of)
+
+    st.success(f"✅ Обработано подразделений: **{len(metrics)}**")
+
+    # Сводная таблица в интерфейсе
+    st.subheader("📊 Сводная таблица")
+
+    def och_pct(item):
+        return item["prim_och"] / item["total_och"] if item["total_och"] > 0 else 0.0
+
+    report_sorted = sorted(report_data, key=och_pct)
+
+    table_rows = []
+    for i, item in enumerate(report_sorted, 1):
+        t_vks = item["total_vks"]
+        p_vks = item["prim_vks"]
+        t_och = item["total_och"]
+        p_och = item["prim_och"]
+        nar   = item["total_och_nar"]
+        pct_vks = p_vks / t_vks * 100 if t_vks else 0
+        pct_och = p_och / t_och * 100 if t_och else 0
+        table_rows.append({
+            "№": i,
+            "Подразделение": item["Подразделение"],
+            "ВКС всего": t_vks,
+            "ВКС МП (%)": f"{p_vks} ({pct_vks:.1f}%)",
+            "Очные (нар.)": f"{t_och} ({nar})",
+            "Очные МП (%)": f"{p_och} ({pct_och:.1f}%)",
+        })
+
+    import pandas as pd
+    df = pd.DataFrame(table_rows).set_index("№")
+    st.dataframe(df, use_container_width=True)
+
+    # Статистика детализации
+    st.subheader("📈 Статистика детализации")
+    stat_cols = st.columns(2)
+    with stat_cols[0]:
+        st.markdown("**ВКС**")
+        st.write(f"• Всего КНМ: {len(detail['vks_denom'])}")
+        st.write(f"• С МП: {len(detail['vks_num'])}")
+        st.write(f"• Без МП: {len(dnn_vks)}")
+        st.write(f"• Отсеянных: {len(rej_vks)}")
+    with stat_cols[1]:
+        st.markdown("**Очные**")
+        st.write(f"• Всего КНМ: {len(detail['och_denom'])}")
+        st.write(f"• С МП: {len(detail['och_num'])}")
+        st.write(f"• Без МП: {len(dnn_och)}")
+        st.write(f"• Очных (нар.) всего: {len(detail['och_nar_denom'])}")
+        st.write(f"• Очных (нар.) с МП: {len(detail['och_nar_num'])}")
+        st.write(f"• Отсеянных: {len(rej_och)}")
+
+    # Формирование и скачивание файла
+    st.divider()
+    with st.spinner("Формирование Excel-файла..."):
+        try:
+            xlsx_bytes = save_to_excel(
+                report_data, headers_orig,
+                detail, rej_vks, rej_och, dnn_vks, dnn_och,
             )
+        except Exception as e:
+            st.error(f"❌ Ошибка при формировании файла: {e}")
+            return
 
-        if len(data_filtered) == 0:
-            st.error("За выбранный период данных нет. Проверьте даты.")
-            st.stop()
+    filename = f"результат_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    st.download_button(
+        label="⬇️ Скачать результат (.xlsx)",
+        data=xlsx_bytes,
+        file_name=filename,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        type="primary",
+        use_container_width=True,
+    )
 
-        st.info(
-            f"Строк в периоде: **{len(data_filtered)}** &nbsp;|&nbsp; "
-            f"Вне периода: **{skipped_out_of_range}** &nbsp;|&nbsp; "
-            f"С нераспознанной датой: **{skipped_invalid_date}**"
-        )
 
-        with st.spinner("Считаем показатели..."):
-            metrics, subj_of, detail, rej_vks, rej_och, dnn_vks, dnn_och = \
-                calculate_all_metrics(data_filtered, col_idx)
-            report_data = build_report_data(metrics, subj_of)
-
-        st.markdown("---")
-        st.subheader("📈 Итоги по субъекту")
-
-        tv = sum(i["total_vks"]     for i in report_data)
-        pv = sum(i["prim_vks"]      for i in report_data)
-        to = sum(i["total_och"]     for i in report_data)
-        po = sum(i["prim_och"]      for i in report_data)
-        tn = sum(i["total_och_nar"] for i in report_data)
-
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("ВКС всего КНМ",       tv)
-        c2.metric("ВКС с МП",            pv,
-                  delta=f"{pv/tv*100:.1f}%" if tv else "—", delta_color="normal")
-        c3.metric("Очные всего КНМ",     to)
-        c4.metric("Очные с МП",          po,
-                  delta=f"{po/to*100:.1f}%" if to else "—", delta_color="normal")
-        c5.metric("Очные с нарушениями", tn)
-
-        with st.expander("📋 Таблица по подразделениям", expanded=True):
-            import pandas as pd
-            rows_display = []
-            for item in sorted(report_data, key=lambda x: x["prim_och"] / x["total_och"] if x["total_och"] > 0 else 0):
-                rows_display.append({
-                    "Подразделение": item["Подразделение"],
-                    "ВКС всего":     item["total_vks"],
-                    "ВКС с МП":      item["prim_vks"],
-                    "ВКС доля, %":   f"{item['prim_vks']/item['total_vks']*100:.1f}" if item["total_vks"] else "—",
-                    "Очные всего":   item["total_och"],
-                    "Очные с нар.":  item["total_och_nar"],
-                    "Очные с МП":    item["prim_och"],
-                    "Очные доля, %": f"{item['prim_och']/item['total_och']*100:.1f}" if item["total_och"] else "—",
-                })
-            st.dataframe(pd.DataFrame(rows_display), use_container_width=True, hide_index=True)
-
-        with st.spinner("Формируем Excel-файл..."):
-            excel_bytes = build_excel(
-                report_data, headers_orig, detail,
-                rej_vks, rej_och, dnn_vks, dnn_och
-            )
-
-        filename = f"результат_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-        st.success("✅ Готово!")
-        st.download_button(
-            label="⬇️ Скачать результат (.xlsx)",
-            data=excel_bytes,
-            file_name=filename,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary",
-            use_container_width=True,
-        )
+if __name__ == "__main__":
+    main()
